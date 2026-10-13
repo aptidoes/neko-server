@@ -1,22 +1,45 @@
-// Servidor Neko: guarda quem está usando o Neko Client (em memória, sem dependências).
-// Rodar: node server.js   (porta via variável PORT, padrão 3000)
+// Neko Server - API de presença do Neko Client.
+// Compatível com o cliente: POST /ping?name=Nick retorna os nicks ativos separados por linha.
 const http = require('http');
-const seen = new Map();           // nick (minúsculo) -> último aviso
-const TTL = 60 * 1000;            // some da lista se ficar 60s sem avisar
+const seen = new Map();
+const TTL = 60_000;
 const NAME = /^[A-Za-z0-9_]{1,16}$/;
 
-http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://x');
-  if (url.pathname === '/ping' && req.method === 'POST') {
-    const name = url.searchParams.get('name') || '';
-    if (!NAME.test(name)) { res.writeHead(400); return res.end('bad name'); }
-    seen.set(name.toLowerCase(), Date.now());
-    const now = Date.now();
-    const list = [];
-    for (const [n, t] of seen) { if (now - t > TTL) seen.delete(n); else list.push(n); }
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    return res.end(list.join('\n'));
+function activeNames() {
+  const now = Date.now();
+  const active = [];
+  for (const [nick, lastSeen] of seen) {
+    if (now - lastSeen > TTL) seen.delete(nick);
+    else active.push(nick);
   }
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Neko server ok');
-}).listen(process.env.PORT || 3000, () => console.log('Neko server rodando'));
+  return active;
+}
+function reply(res, status, body, type = 'text/plain; charset=utf-8') {
+  res.writeHead(status, {
+    'Content-Type': type,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff'
+  });
+  res.end(body);
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
+    return reply(res, 200, 'Neko server ok');
+  }
+  if (url.pathname === '/ping') {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return reply(res, 405, 'method not allowed');
+    }
+    const name = (url.searchParams.get('name') || '').trim();
+    if (!NAME.test(name)) return reply(res, 400, 'bad name');
+    seen.set(name.toLowerCase(), Date.now());
+    return reply(res, 200, activeNames().join('\n'));
+  }
+  return reply(res, 404, 'not found');
+});
+server.listen(Number(process.env.PORT) || 3000, '0.0.0.0', () => {
+  console.log('Neko server rodando na porta ' + (process.env.PORT || 3000));
+});
