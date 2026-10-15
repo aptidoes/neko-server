@@ -1,18 +1,21 @@
-// Neko Server - API de presença do Neko Client.
-// Compatível com o cliente: POST /ping?name=Nick retorna os nicks ativos separados por linha.
+// Neko Server - API de presença + capas do Neko Client.
+// POST /ping?name=Nick[&cape=neko-gato]  -> retorna os nicks ativos (um por linha). Compatível com clientes antigos.
+// GET  /capes                            -> "nick=capeId" (um por linha) para quem está ativo e tem capa.
 const http = require('http');
-const seen = new Map();
+const seen = new Map();          // nick(lowercase) -> { t: timestamp, cape: id | null }
 const TTL = 60_000;
 const NAME = /^[A-Za-z0-9_]{1,16}$/;
+// Só capas prontas do client (as texturas ficam dentro do mod): ninguém consegue mandar imagem para o servidor.
+const CAPES = new Set(['neko-gato', 'neko-pata', 'neko-sentado']);
 
-function activeNames() {
+function active() {
   const now = Date.now();
-  const active = [];
-  for (const [nick, lastSeen] of seen) {
-    if (now - lastSeen > TTL) seen.delete(nick);
-    else active.push(nick);
+  const out = [];
+  for (const [nick, info] of seen) {
+    if (now - info.t > TTL) seen.delete(nick);
+    else out.push([nick, info.cape]);
   }
-  return active;
+  return out;
 }
 function reply(res, status, body, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, {
@@ -35,8 +38,16 @@ const server = http.createServer((req, res) => {
     }
     const name = (url.searchParams.get('name') || '').trim();
     if (!NAME.test(name)) return reply(res, 400, 'bad name');
-    seen.set(name.toLowerCase(), Date.now());
-    return reply(res, 200, activeNames().join('\n'));
+    const cape = (url.searchParams.get('cape') || '').trim().toLowerCase();
+    seen.set(name.toLowerCase(), { t: Date.now(), cape: CAPES.has(cape) ? cape : null });
+    return reply(res, 200, active().map(([n]) => n).join('\n'));
+  }
+  if (url.pathname === '/capes') {
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      return reply(res, 405, 'method not allowed');
+    }
+    return reply(res, 200, active().filter(([, c]) => c).map(([n, c]) => `${n}=${c}`).join('\n'));
   }
   return reply(res, 404, 'not found');
 });
